@@ -32,23 +32,25 @@ def process_database(database: str):
     conn = sqlite3.connect(output_dir + f"{database}_sorted.sqlite")
     curs = conn.cursor()
 
-    model_periods = [fetch[0] for fetch in curs.execute("SELECT t_periods FROM time_periods WHERE flag='f';").fetchall()]
-    existing_periods = [fetch[0] for fetch in curs.execute("SELECT t_periods FROM time_periods WHERE flag='e';").fetchall()]
+    model_periods = [fetch[0] for fetch in curs.execute("SELECT period FROM TimePeriod WHERE flag='f';").fetchall()]
+    existing_periods = [fetch[0] for fetch in curs.execute("SELECT period FROM TimePeriod WHERE flag='e';").fetchall()]
+    all_periods = existing_periods + model_periods
 
     df_eff = pd.read_sql_query("SELECT * FROM Efficiency;", conn)
-    df_exs = pd.read_sql_query("SELECT * FROM ExistingCapacity", conn).set_index(['regions','tech','vintage'])['exist_cap']
-    df_life = pd.read_sql_query("SELECT * FROM LifetimeTech;", conn).set_index(['regions','tech'])['life']
+    df_exs = pd.read_sql_query("SELECT * FROM ExistingCapacity", conn).set_index(['region','tech','vintage'])['capacity']
+    df_life = pd.read_sql_query("SELECT * FROM LifetimeTech;", conn).set_index(['region','tech'])['lifetime']
 
     df_eff['errors'] = ''
     for idx, row in df_eff.iterrows():
         if row['vintage'] in existing_periods:
             try:
-                cap = df_exs.loc[(row['regions'], row['tech'], row['vintage'])]
+                cap = df_exs.loc[(row['region'], row['tech'], row['vintage'])]
                 if pd.isna(cap) or cap == 0:
                     df_eff.loc[idx, 'errors'] += '~exs; '
             except:
                 df_eff.loc[idx, 'errors'] += '~exs; '
                 pass
+
     
     df_invalid = df_eff.loc[df_eff['errors'] != '']
     if len(df_invalid) > 0:
@@ -66,10 +68,10 @@ def process_database(database: str):
 
         cols = t_cols[table]
 
-        # Intexed by periods and vintage
-        if 'periods' in cols and 'vintage' in cols:
+        # Intexed by period and vintage
+        if 'period' in cols and 'vintage' in cols:
 
-            df: pd.DataFrame = pd.read_sql_query(f"SELECT * FROM {table} ORDER BY regions ASC, tech ASC, periods ASC, vintage ASC;", conn)
+            df: pd.DataFrame = pd.read_sql_query(f"SELECT * FROM {table} ORDER BY region ASC, tech ASC, period ASC, vintage ASC;", conn)
             curs.execute(f"DELETE FROM {table}")
             conn.commit()
             df.to_sql(table, conn, if_exists='append', index=False)
@@ -78,14 +80,15 @@ def process_database(database: str):
             # Row validation
             df['life'] = 40
             for idx, row in df.iterrows():
-                try: df.loc[idx, 'life'] = df_life.loc[(row['regions'], row['tech'])]
+                try: df.loc[idx, 'life'] = df_life.loc[(row['region'], row['tech'])]
                 except: pass
 
             df['errors'] = ''
-            df.loc[df['vintage'] > df['periods'], 'errors'] += 'v>p; '
-            df.loc[df['vintage'] + df['life'] <= df['periods'], 'errors'] += 'v+l<=p; '
-            df.loc[~df[['regions','tech','vintage']].apply(tuple, axis=1).isin(df_eff[['regions','tech','vintage']].apply(tuple, axis=1)), 'errors'] += '~eff; '
-            df.loc[~df['periods'].isin(model_periods), 'errors'] += '~per; '
+            df.loc[~df['vintage'].isin(all_periods), 'errors'] += '~vint; '
+            df.loc[df['vintage'] > df['period'], 'errors'] += 'v>p; '
+            df.loc[df['vintage'] + df['life'] <= df['period'], 'errors'] += 'v+l<=p; '
+            df.loc[~df[['region','tech','vintage']].apply(tuple, axis=1).isin(df_eff[['region','tech','vintage']].apply(tuple, axis=1)), 'errors'] += '~eff; '
+            df.loc[~df['period'].isin(model_periods), 'errors'] += '~per; '
 
             df_invalid = df.loc[~(df['errors']=='')]
 
@@ -93,10 +96,12 @@ def process_database(database: str):
                 print(f"\nInvalid rows detected in table {table}:")
                 print(df_invalid)
 
-        elif 'periods' in cols:
+        elif 'period' in cols:
 
-            if 'tech' in cols: df: pd.DataFrame = pd.read_sql_query(f"SELECT * FROM {table} ORDER BY regions ASC, tech ASC, periods ASC;", conn)
-            else: df: pd.DataFrame = pd.read_sql_query(f"SELECT * FROM {table} ORDER BY regions ASC, periods ASC;", conn)
+            if table == 'TimePeriod': continue
+
+            if 'tech' in cols: df: pd.DataFrame = pd.read_sql_query(f"SELECT * FROM {table} ORDER BY region ASC, tech ASC, period ASC;", conn)
+            else: df: pd.DataFrame = pd.read_sql_query(f"SELECT * FROM {table} ORDER BY region ASC, period ASC;", conn)
             curs.execute(f"DELETE FROM {table}")
             conn.commit()
             df.to_sql(table, conn, if_exists='append', index=False)
@@ -106,7 +111,7 @@ def process_database(database: str):
 
             # Row validation
             df['errors'] = ''
-            df.loc[~df['periods'].isin(model_periods), 'errors'] += '~per; '
+            df.loc[~df['period'].isin(model_periods), 'errors'] += '~per; '
 
             df_invalid = df.loc[~(df['errors']=='')]
 
@@ -116,7 +121,7 @@ def process_database(database: str):
 
         elif 'vintage' in cols:
 
-            df: pd.DataFrame = pd.read_sql_query(f"SELECT * FROM {table} ORDER BY regions ASC, tech ASC, vintage ASC;", conn)
+            df: pd.DataFrame = pd.read_sql_query(f"SELECT * FROM {table} ORDER BY region ASC, tech ASC, vintage ASC;", conn)
             curs.execute(f"DELETE FROM {table}")
             conn.commit()
             df.to_sql(table, conn, if_exists='append', index=False)
@@ -124,7 +129,8 @@ def process_database(database: str):
 
             # Row validation
             df['errors'] = ''
-            df.loc[~df[['regions','tech','vintage']].apply(tuple, axis=1).isin(df_eff[['regions','tech','vintage']].apply(tuple, axis=1)), 'errors'] += '~eff; '
+            df.loc[~df['vintage'].isin(all_periods), 'errors'] += '~vint; '
+            df.loc[~df[['region','tech','vintage']].apply(tuple, axis=1).isin(df_eff[['region','tech','vintage']].apply(tuple, axis=1)), 'errors'] += '~eff; '
 
             df_invalid = df.loc[~(df['errors']=='')]
 

@@ -12,6 +12,7 @@
 	~exs: 0 capacity or missing row in ExistingCapacity
 	~eff: does not have a corresponding row in the Efficiency table
 	~per: period is not in modelled ('f' tag) time periods
+	~vint: vintage is not in time periods
 	v>p: vintage is greater than period (tech not built in time for this period)
 	v+l<=p: vintage + life <= period (tech would retire before this period)
 
